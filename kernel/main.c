@@ -1,4 +1,10 @@
 #include "/usr/include/efi/efi.h"
+#include "font.h"
+#include <efi/x86_64/efibind.h>
+
+int memory_used = 0;
+int memory_available = 0;
+char *memory = NULL;
 
 struct memory_map
 {
@@ -15,17 +21,61 @@ typedef struct
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE graphics_mode;
 } kernel_params;
 
+EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
+void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
+
+
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
     UINT32 *framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
     UINT32 height = params.graphics_mode.Info->VerticalResolution;
     UINT32 width = params.graphics_mode.Info->PixelsPerScanLine;
+    EFI_MEMORY_DESCRIPTOR *memory_desc = find_memory_start(&params.map);
+    memory_used = 0;
+    memory_available = memory_desc->NumberOfPages * 4096;
+    memory = (char *)memory_desc->PhysicalStart;
+
     for (INT32 y = 0; y < height; y++)
     {
         for(INT32 x = 0; x < width; x++)
         {
-            framebuffer[y * width + x] = 0xFFFF0000; //Red AARRGGBB
+            framebuffer[y * width + x] = 0xFF000000; //Red AARRGGBB
         }
     }
+
+    render_font('H', framebuffer, width, 30, 30);
+    render_font('I', framebuffer, width, 30, 39);
+    render_font('!', framebuffer, width, 30, 48);
     while(1);
+}
+
+EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map)
+{
+    for (int i = 0; i < map->size / map->descriptor_size; i++)
+    {
+        EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)map->mem_map + (i * map->descriptor_size));
+        if (desc->Type == EfiConventionalMemory)
+            return desc;
+    }
+    return NULL;
+}
+
+void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start)
+{
+    int x,y;
+    int set;
+    int fb_y = fb_y_start;
+    int fb_x = fb_x_start;
+    for (x=0; x < 8; x++) 
+    {
+        for (y=0; y < 8; y++) 
+        {
+            set = font8x8_basic[c][x] & 1 << y;
+            if (set)
+                framebuffer[(fb_y * width) + fb_x] = 0xFFFFFFFF;
+            fb_x++;
+        }
+        fb_y++;
+        fb_x = fb_x_start;
+    }
 }

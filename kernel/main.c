@@ -20,6 +20,15 @@ struct memory_map
     UINT32 descriptor_version;
 };
 
+struct allocated_memory
+{
+    void *start_addr;
+    void *finish_addr;
+};
+
+struct allocated_memory *memory_allocations;
+int memory_allocations_index;
+
 typedef struct 
 {
     struct memory_map map;
@@ -32,6 +41,7 @@ void print(char *c, UINT32 *framebuffer, UINT32 width);
 void putchar(char c, UINT32 *framebuffer);
 void putnumber(INT64 num, UINT32 *framebuffer);
 void printf(UINT32 *framebuffer, const char *format, ...);
+void *malloc(UINT64 size);
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
@@ -43,6 +53,10 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     memory_available = memory_desc->NumberOfPages * 4096;
     memory = (char *)memory_desc->PhysicalStart;
 
+    memory_allocations = (struct allocated_memory *)memory;
+    memory += 4096;
+    memory_available = (memory_desc->NumberOfPages - 1) * 4096;
+    memory_allocations_index = 0;
     letters_available = (width-30)/9;
     rows_available = height/15;
     letters_used = 0;
@@ -56,7 +70,7 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         }
     }
 
-    //print("Hi!1821692hauishbaiskabsi18972192aosabsia8siuasiagsi1297819281hsaosqasjoasaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", framebuffer, width);
+    malloc(100000000);
     printf(framebuffer, "Characters %ix%i\n", letters_available, rows_available);
     printf(framebuffer, "Memory available %iMB", memory_available/(1024 * 1024));
     while(1);
@@ -160,17 +174,17 @@ void printf(UINT32 *framebuffer, const char *format, ...)
     {
         if (!format)
             break;
-        if (*format == L'%')
+        if (*format == '%')
         {
             format++;
             if (!*format)
                 break;
             switch (*format)
             {
-                case L'i':
+                case 'i':
                     putnumber((unsigned int)va_arg(pointer, unsigned int), framebuffer);
                     break;
-                case L's':
+                case 's':
                     print((char *)va_arg(pointer, char *), framebuffer, width);
                     break;
             }
@@ -179,4 +193,18 @@ void printf(UINT32 *framebuffer, const char *format, ...)
             putchar(*format, framebuffer);
         format++;
     }
+}
+
+void *malloc(UINT64 size)
+{
+    if (memory_available > size)
+    {
+        memory_allocations[memory_allocations_index].start_addr = memory;
+        memory += size;
+        memory_allocations[memory_allocations_index].finish_addr = memory;
+        memory_available -= size;
+
+        return memory_allocations[memory_allocations_index].start_addr;
+    }
+    return NULL;
 }

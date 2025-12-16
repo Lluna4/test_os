@@ -1,13 +1,15 @@
 #include "/usr/include/efi/efi.h"
 #include "font.h"
+#include <stdarg.h>
 
 int memory_used = 0;
-int memory_available = 0;
+UINT64 memory_available = 0;
 char *memory = NULL;
 int letters_available = 0;
 int letters_used = 0;
 int rows_available = 0;
 int rows_used = 0;
+UINT32 width;
 
 struct memory_map
 {
@@ -27,19 +29,22 @@ typedef struct
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
 void print(char *c, UINT32 *framebuffer, UINT32 width);
+void putchar(char c, UINT32 *framebuffer);
+void putnumber(INT64 num, UINT32 *framebuffer);
+void printf(UINT32 *framebuffer, const char *format, ...);
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
     UINT32 *framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
     UINT32 height = params.graphics_mode.Info->VerticalResolution;
-    UINT32 width = params.graphics_mode.Info->PixelsPerScanLine;
+    width = params.graphics_mode.Info->PixelsPerScanLine;
     EFI_MEMORY_DESCRIPTOR *memory_desc = find_memory_start(&params.map);
     memory_used = 0;
     memory_available = memory_desc->NumberOfPages * 4096;
     memory = (char *)memory_desc->PhysicalStart;
 
     letters_available = (width-30)/9;
-    rows_available = height/10;
+    rows_available = height/15;
     letters_used = 0;
     rows_used = 0;
 
@@ -51,19 +56,27 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         }
     }
 
-    print("Hi!1821692hauishbaiskabsi18972192aosabsia8siuasiagsi1297819281hsaosqasjoasaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", framebuffer, width);
+    //print("Hi!1821692hauishbaiskabsi18972192aosabsia8siuasiagsi1297819281hsaosqasjoasaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", framebuffer, width);
+    printf(framebuffer, "Characters %ix%i\n", letters_available, rows_available);
+    printf(framebuffer, "Memory available %iMB", memory_available/(1024 * 1024));
     while(1);
 }
 
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map)
 {
+    EFI_MEMORY_DESCRIPTOR *largest = NULL;
     for (int i = 0; i < map->size / map->descriptor_size; i++)
     {
         EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)map->mem_map + (i * map->descriptor_size));
         if (desc->Type == EfiConventionalMemory)
-            return desc;
+        {
+            if (!largest)
+                largest = desc;
+            else if (largest->NumberOfPages < desc->NumberOfPages)
+                largest = desc;
+        }
     }
-    return NULL;
+    return largest;
 }
 
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start)
@@ -90,13 +103,80 @@ void print(char *c, UINT32 *framebuffer, UINT32 width)
 {
     while (*c)
     {
-        if (letters_used >= letters_available)
+        if (letters_used >= letters_available || *c == '\n')
         {
             rows_used++;
             letters_used = 0;
+            if (*c == '\n')
+            {
+                c++;
+                continue;
+            }
         }
-        render_font(*c, framebuffer, width, 30 + (rows_used * 10), 30 + (letters_used * 9));
+        render_font(*c, framebuffer, width, 30 + (rows_used * 15), 30 + (letters_used * 9));
         letters_used++;
         c++;
+    }
+}
+
+void putchar(char c, UINT32 *framebuffer)
+{
+    if (letters_used >= letters_available || c == '\n')
+    {
+        rows_used++;
+        letters_used = 0;
+        if (c == '\n')
+            return;
+    }
+    render_font(c, framebuffer, width, 30 + (rows_used * 15), 30 + (letters_used * 9));
+    letters_used++;
+    c++;
+}
+
+void putnumber(INT64 num, UINT32 *framebuffer)
+{
+    if (num == -2147483648)
+		return (print("-2147483648", framebuffer, width));
+    if (num < 0)
+    {
+        putchar('-', framebuffer);
+        num = num * -1;
+    }
+    if (num >= 10)
+    {
+        putnumber(num/10, framebuffer);
+        num = num % 10;
+    }
+    if (num < 10)
+        putchar(num + '0', framebuffer);
+}
+
+void printf(UINT32 *framebuffer, const char *format, ...)
+{
+    va_list pointer;
+
+    va_start(pointer, format);
+    while (*format)
+    {
+        if (!format)
+            break;
+        if (*format == L'%')
+        {
+            format++;
+            if (!*format)
+                break;
+            switch (*format)
+            {
+                case L'i':
+                    putnumber((unsigned int)va_arg(pointer, unsigned int), framebuffer);
+                    break;
+                case L's':
+                    print((char *)va_arg(pointer, char *), framebuffer, width);
+                    break;
+            }
+        }
+        else 
+            putchar(*format, framebuffer);
+        format++;
     }
 }

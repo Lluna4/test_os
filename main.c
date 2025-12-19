@@ -1,4 +1,4 @@
-#include "/usr/include/efi/efi.h"
+#include "gnu-efi-code/inc/efi.h"
 #include "printing.h"
 
 void println(EFI_SYSTEM_TABLE *system_table, CHAR16 *str)
@@ -27,6 +27,9 @@ typedef struct
 {
     struct memory_map map;
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE graphics_mode;
+    EFI_RUNTIME_SERVICES *runtime_services;
+    UINTN NumberOfTableEntries;
+    EFI_CONFIGURATION_TABLE *config_table; 
 } kernel_params;
 
 
@@ -135,6 +138,9 @@ EFI_STATUS EFIAPI efi_main(IN EFI_HANDLE image_handle, IN EFI_SYSTEM_TABLE *syst
                 printf(system_table, (CHAR16 *)L"Exiting booting services failed %i\r\n", ret);
                 return EFI_SUCCESS;
             }
+            params.config_table = system_table->ConfigurationTable;
+            params.NumberOfTableEntries = system_table->NumberOfTableEntries;
+            params.runtime_services = system_table->RuntimeServices;
             kernel_main(params);
             continue;
         }

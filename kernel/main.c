@@ -1,4 +1,4 @@
-#include "/usr/include/efi/efi.h"
+#include "../gnu-efi-code/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
 
@@ -33,15 +33,24 @@ typedef struct
 {
     struct memory_map map;
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE graphics_mode;
+    EFI_RUNTIME_SERVICES *runtime_services;
+    UINTN NumberOfTableEntries;
+    EFI_CONFIGURATION_TABLE *config_table; 
 } kernel_params;
 
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
 void print(char *c, UINT32 *framebuffer, UINT32 width);
+void panic(char *message, UINT32 *framebuffer);
+void printn(char *c, UINT32 *framebuffer, size_t n);
 void putchar(char c, UINT32 *framebuffer);
 void putnumber(INT64 num, UINT32 *framebuffer);
+void puthex(UINT64 num, UINT32 *framebuffer);
 void printf(UINT32 *framebuffer, const char *format, ...);
 void *malloc(UINT64 size);
+int memcmp(const void *s1, const void *s2, size_t n);
+void *memcpy(void *dst, void *src, size_t n);
+
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
@@ -70,9 +79,34 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         }
     }
 
-    malloc(100000000);
     printf(framebuffer, "Characters %ix%i\n", letters_available, rows_available);
-    printf(framebuffer, "Memory available %iMB", memory_available/(1024 * 1024));
+    printf(framebuffer, "Memory available %iMB\n", memory_available/(1024 * 1024));
+    printf(framebuffer, "Number of table services %i\n", params.NumberOfTableEntries);
+    char *acpi_table = NULL;
+    for (int i = 0; i < params.NumberOfTableEntries; i++)
+    {
+        EFI_GUID guid = params.config_table[i].VendorGuid;
+        EFI_GUID acpi_guid = (EFI_GUID)ACPI_20_TABLE_GUID ;
+        if (memcmp(&guid, &acpi_guid, sizeof(EFI_GUID)) == 0)
+        {
+            acpi_table = params.config_table[i].VendorTable;
+            printf(framebuffer, "Got the ACPI table\n");
+        }
+    }
+    if (!acpi_table)
+        panic("Acpi table not found", framebuffer);
+    printf(framebuffer, "Acpi table signature: ");
+    printn(acpi_table, framebuffer, 8);
+    printf(framebuffer, "\n");
+    printf(framebuffer, "Acpi table OEM: ");
+    printn(&acpi_table[9], framebuffer, 6);
+    printf(framebuffer, "\n");
+    /*uintptr_t acpi_table_addr = 0;
+    memcpy(&acpi_table_addr, &acpi_table[16], sizeof(INT32));
+    char *acpi_ = (void *)acpi_table_addr;
+    INT32 lenght = 0;
+    memcpy(&lenght, &acpi_table[20], sizeof(INT32));*/
+    printf(framebuffer, "address of acpi table is 0x%x lenght of acpi table is %i\n", *(UINT32 *)&acpi_table[16], *(UINT32 *)&acpi_table[20]);
     while(1);
 }
 
@@ -113,6 +147,8 @@ void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int 
     }
 }
 
+
+
 void print(char *c, UINT32 *framebuffer, UINT32 width)
 {
     while (*c)
@@ -133,6 +169,13 @@ void print(char *c, UINT32 *framebuffer, UINT32 width)
     }
 }
 
+void panic(char *message, UINT32 *framebuffer)
+{
+    print("PANIC! ", framebuffer, width);
+    print(message, framebuffer, width);
+    asm( "hlt" );
+}
+
 void putchar(char c, UINT32 *framebuffer)
 {
     if (letters_used >= letters_available || c == '\n')
@@ -145,6 +188,28 @@ void putchar(char c, UINT32 *framebuffer)
     render_font(c, framebuffer, width, 30 + (rows_used * 15), 30 + (letters_used * 9));
     letters_used++;
     c++;
+}
+
+void printn(char *c, UINT32 *framebuffer, size_t n)
+{
+    int i = 0;
+    while (i < n)
+    {
+        if (letters_used >= letters_available || *c == '\n')
+        {
+            rows_used++;
+            letters_used = 0;
+            if (*c == '\n')
+            {
+                c++;
+                continue;
+            }
+        }
+        render_font(*c, framebuffer, width, 30 + (rows_used * 15), 30 + (letters_used * 9));
+        letters_used++;
+        c++;
+        i++;
+    }
 }
 
 void putnumber(INT64 num, UINT32 *framebuffer)
@@ -162,6 +227,21 @@ void putnumber(INT64 num, UINT32 *framebuffer)
         num = num % 10;
     }
     if (num < 10)
+        putchar(num + '0', framebuffer);
+}
+
+void puthex(UINT64 num, UINT32 *framebuffer)
+{
+    if (num >= 16)
+    {
+        puthex(num/16, framebuffer);
+        num = num % 16;
+    }
+    if (num > 9)
+    {
+        putchar(num + 'A', framebuffer);
+    }
+    if (num <= 9)
         putchar(num + '0', framebuffer);
 }
 
@@ -187,6 +267,9 @@ void printf(UINT32 *framebuffer, const char *format, ...)
                 case 's':
                     print((char *)va_arg(pointer, char *), framebuffer, width);
                     break;
+                case 'x':
+                    puthex((unsigned int)va_arg(pointer, unsigned int), framebuffer);
+                    break;
             }
         }
         else 
@@ -197,7 +280,7 @@ void printf(UINT32 *framebuffer, const char *format, ...)
 
 void *malloc(UINT64 size)
 {
-    if (memory_available > size)
+    if (memory_available > size && memory_allocations_index <= 256)
     {
         memory_allocations[memory_allocations_index].start_addr = memory;
         memory += size;
@@ -207,4 +290,31 @@ void *malloc(UINT64 size)
         return memory_allocations[memory_allocations_index].start_addr;
     }
     return NULL;
+}
+
+int memcmp(const void *s1, const void *s2, size_t n)
+{
+    char *s1_ = (char *)s1;
+    char *s2_ = (char *)s2;
+
+    for (int i = 0; i < n; i++)
+    {
+        if ((unsigned char)s1_[i] != (unsigned char)s2_[i])
+            return (unsigned char)s1_[i] - (unsigned char)s2_[i];
+    }
+    return 0;
+}
+
+void *memcpy(void *dst, void *src, size_t n)
+{
+    int i = 0;
+    char *ret = dst;
+    while(i < n)
+    {
+        *(char *)dst = *(char *)src;
+        (char *)dst++;
+        (char *)src++;
+        i++;
+    }
+    return ret;
 }

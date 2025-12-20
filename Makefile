@@ -6,8 +6,8 @@ SRC = main.c
 
 all: ${SRC} kernel.bin
 	x86_64-w64-mingw32-gcc ${SRC} ${FLAGS} -e efi_main -o ${NAME}
-	qemu-system-x86_64 --bios /usr/share/edk2/ovmf/OVMF_CODE.fd -m 250M -net none -drive format=raw,file=fat:rw:internal-disk
-
+	qemu-system-x86_64 --bios /usr/share/edk2/ovmf/OVMF_CODE.fd -m 250M -netdev user,id=net0 -device rtl8139,netdev=net0 -drive format=raw,file=fat:rw:internal-disk
+	
 fclean: clean
 	rm -rf ${NAME}
 

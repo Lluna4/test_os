@@ -1,6 +1,7 @@
-#include "../gnu-efi-code/inc/efi.h"
+#include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
+#include <stdint.h>
 
 int memory_used = 0;
 UINT64 memory_available = 0;
@@ -39,6 +40,17 @@ typedef struct
 } kernel_params;
 
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
+static inline UINT32 inl(uint16_t port)
+{
+    uint32_t ret;
+    __asm__ volatile ("inl %1, %0": "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
+static inline void outl(uint16_t port, uint32_t val)
+{
+    __asm__ volatile ("outl %0, %1" : : "a"(val), "Nd"(port));
+}
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
 void print(char *c, UINT32 *framebuffer, UINT32 width);
 void panic(char *message, UINT32 *framebuffer);
@@ -50,6 +62,7 @@ void printf(UINT32 *framebuffer, const char *format, ...);
 void *malloc(UINT64 size);
 int memcmp(const void *s1, const void *s2, size_t n);
 void *memcpy(void *dst, void *src, size_t n);
+void write_to_address(UINT64 addr, void *data, size_t size);
 
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
@@ -107,6 +120,33 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     INT32 lenght = 0;
     memcpy(&lenght, &acpi_table[20], sizeof(INT32));*/
     printf(framebuffer, "address of acpi table is 0x%x lenght of acpi table is %i\n", *(UINT32 *)&acpi_table[16], *(UINT32 *)&acpi_table[20]);
+    char *xsdt = (void *)*(UINT64 *)&acpi_table[24];
+    int xsdt_lenght = *(int *)&xsdt[4];
+    int address_entries = (xsdt_lenght - 36)/8;
+    printf(framebuffer, "XSDT number of entries: %i\n", address_entries);
+    for (int i = 0; i < address_entries; i++)
+    {
+        printf(framebuffer, "entry %i signature: ", i);
+        char *address = (void *)*(UINT64 *)&xsdt[36 + (8 * i)];
+        printn(address, framebuffer, 4);
+        printf(framebuffer, "\n");
+    }
+    UINT64 data_addr = 0xCFC;
+    for (int device = 0; device < 32; device++)
+    {
+        uint32_t address = (uint32_t)((0 << 16) | (device << 11) |
+              (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
+        outl(0xCF8, address);
+        //write_to_address(0xCF8, &address, 4);
+        uint16_t vendor_id = (uint16_t)((inl(0xCFC) >> ((0 & 2) * 8)) & 0xFFFF);
+        uint16_t device_id = (uint16_t)((inl(0xCFC) >> (2 & 2) * 8) & 0xFFFF);
+        printf(framebuffer,"pci dev %i vendor id %x device id %x\n", device, vendor_id, device_id);
+        if (vendor_id == 0x10EC && device_id == 0x8139)
+        {
+            printf(framebuffer, "Found RTL8139\n");
+        }
+        
+    }
     while(1);
 }
 
@@ -239,7 +279,7 @@ void puthex(UINT64 num, UINT32 *framebuffer)
     }
     if (num > 9)
     {
-        putchar(num + 'A', framebuffer);
+        putchar((num - 10) + 'A', framebuffer);
     }
     if (num <= 9)
         putchar(num + '0', framebuffer);
@@ -317,4 +357,10 @@ void *memcpy(void *dst, void *src, size_t n)
         i++;
     }
     return ret;
+}
+
+void write_to_address(UINT64 addr, void *data, size_t size)
+{
+    char *a = (char *)*(UINT64 *)&addr;
+    memcpy(a, data, size);
 }

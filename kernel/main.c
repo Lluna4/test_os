@@ -63,6 +63,8 @@ void *malloc(UINT64 size);
 int memcmp(const void *s1, const void *s2, size_t n);
 void *memcpy(void *dst, void *src, size_t n);
 void write_to_address(UINT64 addr, void *data, size_t size);
+uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
+uint32_t read_from_pci_whole(uint8_t buf, uint8_t device, uint8_t func, uint8_t offset);
 
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
@@ -132,18 +134,36 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         printf(framebuffer, "\n");
     }
     UINT64 data_addr = 0xCFC;
+    char found = 0;
+    int dev_found = 0;
     for (int device = 0; device < 32; device++)
     {
-        uint32_t address = (uint32_t)((0 << 16) | (device << 11) |
-              (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
-        outl(0xCF8, address);
-        //write_to_address(0xCF8, &address, 4);
-        uint16_t vendor_id = (uint16_t)((inl(0xCFC) >> ((0 & 2) * 8)) & 0xFFFF);
-        uint16_t device_id = (uint16_t)((inl(0xCFC) >> (2 & 2) * 8) & 0xFFFF);
+        uint16_t vendor_id = read_from_pci(0, device, 0, 0);
+        uint16_t device_id = read_from_pci(0, device, 0, 2);
         printf(framebuffer,"pci dev %i vendor id %x device id %x\n", device, vendor_id, device_id);
         if (vendor_id == 0x10EC && device_id == 0x8139)
         {
             printf(framebuffer, "Found RTL8139\n");
+            found = 1;
+            dev_found = device;
+            break;
+        }
+        
+    }
+    if (found)
+    {
+        uint32_t header_type_ = read_from_pci_whole(0, dev_found, 0, 0xC);
+        uint8_t header_type = ((char *)&header_type_)[3];
+        printf(framebuffer, "header type %i\n", header_type);
+        if (header_type != 0)
+            panic("Device is not as expected", framebuffer);
+        for (int i = 0x10; i < 0x24; i += 4)
+        {
+            uint32_t bar = read_from_pci_whole(0, dev_found, 0, i);
+            if (i == 0x10)
+                printf(framebuffer, "Bar %i: 0x%x\n", 0, bar);
+            else
+             printf(framebuffer, "Bar %i: 0x%x\n", (i - 0x10)/4, bar);
         }
         
     }
@@ -363,4 +383,26 @@ void write_to_address(UINT64 addr, void *data, size_t size)
 {
     char *a = (char *)*(UINT64 *)&addr;
     memcpy(a, data, size);
+}
+
+
+uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset)
+{
+        uint32_t address = (uint32_t)((0 << 16) | (device << 11) |
+              (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
+        outl(0xCF8, address);
+        //write_to_address(0xCF8, &address, 4);
+        uint16_t ret = (uint16_t)((inl(0xCFC) >> ((offset & 2) * 8)) & 0xFFFF);
+        return ret;
+}
+
+
+uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset)
+{
+        uint32_t address = (uint32_t)((bus << 16) | (device << 11) |
+              (func << 8) | (offset & 0xFC) | ((uint32_t)0x80000000));
+        outl(0xCF8, address);
+        //write_to_address(0xCF8, &address, 4);
+        uint32_t ret = (uint32_t)inl(0xCFC);
+        return ret;
 }

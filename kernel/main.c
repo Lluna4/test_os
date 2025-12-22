@@ -1,5 +1,6 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 
@@ -47,10 +48,25 @@ static inline UINT32 inl(uint16_t port)
     return ret;
 }
 
+
+static inline UINT16 inw(uint16_t port)
+{
+    uint16_t ret;
+    __asm__ volatile ("inw %1, %0": "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 static inline void outl(uint16_t port, uint32_t val)
 {
     __asm__ volatile ("outl %0, %1" : : "a"(val), "Nd"(port));
 }
+
+
+static inline void outw(uint16_t port, uint16_t val)
+{
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
 void print(char *c, UINT32 *framebuffer, UINT32 width);
 void panic(char *message, UINT32 *framebuffer);
@@ -64,7 +80,8 @@ int memcmp(const void *s1, const void *s2, size_t n);
 void *memcpy(void *dst, void *src, size_t n);
 void write_to_address(UINT64 addr, void *data, size_t size);
 uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
-uint32_t read_from_pci_whole(uint8_t buf, uint8_t device, uint8_t func, uint8_t offset);
+uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
+void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write);
 
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
@@ -154,18 +171,32 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     {
         uint32_t header_type_ = read_from_pci_whole(0, dev_found, 0, 0xC);
         uint8_t header_type = ((char *)&header_type_)[3];
+        uint16_t command = read_from_pci(0, dev_found, 0, 0x4);
+        //TODO Initialize RTL8139 properly
         printf(framebuffer, "header type %i\n", header_type);
         if (header_type != 0)
             panic("Device is not as expected", framebuffer);
+        uint32_t io_addr = 0x0;
         for (int i = 0x10; i < 0x24; i += 4)
         {
             uint32_t bar = read_from_pci_whole(0, dev_found, 0, i);
             if (i == 0x10)
                 printf(framebuffer, "Bar %i: 0x%x\n", 0, bar);
             else
-             printf(framebuffer, "Bar %i: 0x%x\n", (i - 0x10)/4, bar);
+                printf(framebuffer, "Bar %i: 0x%x\n", (i - 0x10)/4, bar);
+            if (bar & (1 << 0) && bar != 0x0)
+            {
+                printf(framebuffer, "I/O port bar found %x\n", bar);
+                io_addr = bar & 0xFFFFFFFC;
+                break;
+            }
         }
-        
+        if (!io_addr)
+            panic("io port address for RTL8139 not found", framebuffer);
+        printf(framebuffer, "i/o BAR address %x\n", io_addr);
+        uint32_t mac1 = (uint32_t)inl(io_addr);
+        uint16_t mac2 = (uint16_t)inw(io_addr + 4);
+        printf(framebuffer, "mac address %x%x\n", mac2, mac1);
     }
     while(1);
 }
@@ -405,4 +436,13 @@ uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t 
         //write_to_address(0xCF8, &address, 4);
         uint32_t ret = (uint32_t)inl(0xCFC);
         return ret;
+}
+
+
+void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write)
+{
+        uint32_t address = (uint32_t)((0 << 16) | (device << 11) |
+              (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
+        outl(0xCF8, address);
+        outw(0xCFC + (offset & 2), to_write);
 }

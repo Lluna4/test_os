@@ -1,8 +1,6 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
-#include <math.h>
 #include <stdarg.h>
-#include <stdint.h>
 
 int memory_used = 0;
 UINT64 memory_available = 0;

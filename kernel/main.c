@@ -1,6 +1,7 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
+#include <stdint.h>
 
 int memory_used = 0;
 UINT64 memory_available = 0;
@@ -54,6 +55,13 @@ static inline UINT16 inw(uint16_t port)
     return ret;
 }
 
+static inline UINT8 inb(uint16_t port)
+{
+    uint8_t ret;
+    __asm__ volatile ("inb %1, %0": "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 static inline void outl(uint16_t port, uint32_t val)
 {
     __asm__ volatile ("outl %0, %1" : : "a"(val), "Nd"(port));
@@ -63,6 +71,11 @@ static inline void outl(uint16_t port, uint32_t val)
 static inline void outw(uint16_t port, uint16_t val)
 {
     __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline void outb(uint16_t port, uint8_t val)
+{
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
@@ -195,6 +208,11 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         uint32_t mac1 = (uint32_t)inl(io_addr);
         uint16_t mac2 = (uint16_t)inw(io_addr + 4);
         printf(framebuffer, "mac address %x%x\n", mac2, mac1);
+        outb(io_addr + 0x52, 0x0);
+        printf(framebuffer, "Turned on RTL8139\n");
+        outb(io_addr + 0x37, 0x10);
+        while((inb(io_addr + 0x37) & 0x10) != 0);
+        printf(framebuffer, "Resetted RTL8139\n");
     }
     while(1);
 }

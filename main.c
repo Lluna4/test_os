@@ -1,4 +1,4 @@
-#include "gnu-efi-code/inc/efi.h"
+#include "gnu-efi/inc/efi.h"
 #include "printing.h"
 
 void println(EFI_SYSTEM_TABLE *system_table, CHAR16 *str)
@@ -93,60 +93,49 @@ EFI_STATUS EFIAPI efi_main(IN EFI_HANDLE image_handle, IN EFI_SYSTEM_TABLE *syst
     CHAR16 buf2[2] = {0};
     printf(system_table, (CHAR16 *)L"Hi UEFI %i %s\r\n", 16, (CHAR16 *)L"AUJSBAUJS");
     UINTN a = 0;
-    while (1)
+    memset(&params.map, 0, sizeof(struct memory_map));
+    system_table->BootServices->GetMemoryMap(&params.map.size, params.map.mem_map, &params.map.key, &params.map.descriptor_size, &params.map.descriptor_version);
+    
+    params.map.size += params.map.descriptor_size * 2;
+    ret = system_table->BootServices->AllocatePool(EfiLoaderData, params.map.size, (VOID **)&params.map.mem_map);
+    if (ret != EFI_SUCCESS)
+        printf(system_table, (CHAR16 *)L"Allocating failed %i\r\n", ret);
+    
+    system_table->BootServices->GetMemoryMap(&params.map.size, params.map.mem_map, &params.map.key, &params.map.descriptor_size, &params.map.descriptor_version);
+    INT32 usable_mem = 0;
+    for (int i = 0; i < params.map.size / params.map.descriptor_size; i++)
     {
-        system_table->BootServices->WaitForEvent(1, &system_table->ConIn->WaitForKey, &a);
-        system_table->ConIn->ReadKeyStroke(system_table->ConIn, &key);
-        /*if (key.UnicodeChar == 'q')
-            break;*/
-        if (key.UnicodeChar == L'\r')
+        EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)params.map.mem_map + (i * params.map.descriptor_size));
+        printf(system_table, (CHAR16 *)L"%i:Attribute %i Page num %i pad %i phy start %i virt start %i type %i \r\n", i, desc->Attribute, desc->NumberOfPages, desc->Pad, desc->PhysicalStart, desc->VirtualStart, desc->Type);
+        if (desc->Type == EfiLoaderCode ||
+            desc->Type ==   EfiLoaderData || 
+            desc->Type ==   EfiBootServicesCode ||
+            desc->Type ==   EfiBootServicesData ||
+            desc->Type ==   EfiRuntimeServicesCode ||
+            desc->Type ==   EfiRuntimeServicesData ||
+            desc->Type ==   EfiConventionalMemory ||
+            desc->Type ==   EfiPersistentMemory)
         {
-            memset(&params.map, 0, sizeof(struct memory_map));
-            system_table->BootServices->GetMemoryMap(&params.map.size, params.map.mem_map, &params.map.key, &params.map.descriptor_size, &params.map.descriptor_version);
-            
-            params.map.size += params.map.descriptor_size * 2;
-            ret = system_table->BootServices->AllocatePool(EfiLoaderData, params.map.size, (VOID **)&params.map.mem_map);
-            if (ret != EFI_SUCCESS)
-                printf(system_table, (CHAR16 *)L"Allocating failed %i\r\n", ret);
-            
-            system_table->BootServices->GetMemoryMap(&params.map.size, params.map.mem_map, &params.map.key, &params.map.descriptor_size, &params.map.descriptor_version);
-            INT32 usable_mem = 0;
-            for (int i = 0; i < params.map.size / params.map.descriptor_size; i++)
-            {
-                EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)params.map.mem_map + (i * params.map.descriptor_size));
-                printf(system_table, (CHAR16 *)L"%i:Attribute %i Page num %i pad %i phy start %i virt start %i type %i \r\n", i, desc->Attribute, desc->NumberOfPages, desc->Pad, desc->PhysicalStart, desc->VirtualStart, desc->Type);
-                if (desc->Type == EfiLoaderCode ||
-                    desc->Type ==   EfiLoaderData || 
-                    desc->Type ==   EfiBootServicesCode ||
-                    desc->Type ==   EfiBootServicesData ||
-                    desc->Type ==   EfiRuntimeServicesCode ||
-                    desc->Type ==   EfiRuntimeServicesData ||
-                    desc->Type ==   EfiConventionalMemory ||
-                    desc->Type ==   EfiPersistentMemory)
-                {
-                    usable_mem += desc->NumberOfPages * 4096;
-                }
-
-            }
-            
-            printf(system_table, (CHAR16 *)L"Total usable memory %i MB\r\n", usable_mem/(1024 * 1024));
-            print(system_table, L"\r\n");
-            system_table->BootServices->GetMemoryMap(&params.map.size, params.map.mem_map, &params.map.key, &params.map.descriptor_size, &params.map.descriptor_version);
-            ret = system_table->BootServices->ExitBootServices(image_handle, params.map.key);
-            if (ret != EFI_SUCCESS)
-            {
-                printf(system_table, (CHAR16 *)L"Exiting booting services failed %i\r\n", ret);
-                return EFI_SUCCESS;
-            }
-            params.config_table = system_table->ConfigurationTable;
-            params.NumberOfTableEntries = system_table->NumberOfTableEntries;
-            params.runtime_services = system_table->RuntimeServices;
-            kernel_main(params);
-            continue;
+            usable_mem += desc->NumberOfPages * 4096;
         }
+
+    }
+    
+    printf(system_table, (CHAR16 *)L"Total usable memory %i MB\r\n", usable_mem/(1024 * 1024));
+    print(system_table, L"\r\n");
+    system_table->BootServices->GetMemoryMap(&params.map.size, params.map.mem_map, &params.map.key, &params.map.descriptor_size, &params.map.descriptor_version);
+    ret = system_table->BootServices->ExitBootServices(image_handle, params.map.key);
+    if (ret != EFI_SUCCESS)
+    {
+        printf(system_table, (CHAR16 *)L"Exiting booting services failed %i\r\n", ret);
+        return EFI_SUCCESS;
+    }
+    params.config_table = system_table->ConfigurationTable;
+    params.NumberOfTableEntries = system_table->NumberOfTableEntries;
+    params.runtime_services = system_table->RuntimeServices;
+    kernel_main(params);
         buf2[0] = key.UnicodeChar;
         print(system_table, buf2);
-    }
 
     return EFI_SUCCESS;
 }

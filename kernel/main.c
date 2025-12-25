@@ -1,7 +1,6 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
-#include <stdint.h>
 
 int memory_used = 0;
 UINT64 memory_available = 0;
@@ -101,6 +100,7 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     UINT32 height = params.graphics_mode.Info->VerticalResolution;
     width = params.graphics_mode.Info->PixelsPerScanLine;
     EFI_MEMORY_DESCRIPTOR *memory_desc = find_memory_start(&params.map);
+    char *rx_buffer = malloc(8192 + 16);
     memory_used = 0;
     memory_available = memory_desc->NumberOfPages * 4096;
     memory = (char *)memory_desc->PhysicalStart;
@@ -213,6 +213,8 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         outb(io_addr + 0x37, 0x10);
         while((inb(io_addr + 0x37) & 0x10) != 0);
         printf(framebuffer, "Resetted RTL8139\n");
+        outl(io_addr + 0x30, (uintptr_t)rx_buffer);
+        printf(framebuffer, "receive buffer initialized\n");
     }
     while(1);
 }
@@ -387,14 +389,15 @@ void printf(UINT32 *framebuffer, const char *format, ...)
 
 void *malloc(UINT64 size)
 {
+    int allocations_index = memory_allocations_index;
     if (memory_available > size && memory_allocations_index <= 256)
     {
         memory_allocations[memory_allocations_index].start_addr = memory;
         memory += size;
         memory_allocations[memory_allocations_index].finish_addr = memory;
         memory_available -= size;
-
-        return memory_allocations[memory_allocations_index].start_addr;
+        memory_allocations_index++;
+        return memory_allocations[allocations_index].start_addr;
     }
     return NULL;
 }
@@ -416,11 +419,13 @@ void *memcpy(void *dst, void *src, size_t n)
 {
     int i = 0;
     char *ret = dst;
+    char *d = dst;
+    char *s = src;
     while(i < n)
     {
-        *(char *)dst = *(char *)src;
-        (char *)dst++;
-        (char *)src++;
+        *d = *s;
+        d++;
+        s++;
         i++;
     }
     return ret;

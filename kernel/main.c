@@ -1,7 +1,17 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
-
+#define ISR_ERR_STUB(n) __attribute__((interrupt))\
+                                                    void isr_stub_##n(void *stack_frame, unsigned long code)\
+                                                    {\
+                                                        exception();\
+                                                    }
+#define ISR_NO_ERR_STUB(n) __attribute__((interrupt)) \
+                                                      void isr_stub_##n(void *stack_frame)\
+                                                      {\
+                                                          exception();\
+                                                      }
+#define GET_ISR(n) isr_stub_##n()
 int memory_used = 0;
 UINT64 memory_available = 0;
 char *memory = NULL;
@@ -10,6 +20,7 @@ int letters_used = 0;
 int rows_available = 0;
 int rows_used = 0;
 UINT32 width;
+UINT32 *framebuffer;
 
 struct memory_map
 {
@@ -37,6 +48,43 @@ typedef struct
     UINTN NumberOfTableEntries;
     EFI_CONFIGURATION_TABLE *config_table; 
 } kernel_params;
+
+typedef struct {
+    uint16_t    isr_low;
+    uint16_t    kernel_cs;
+    uint8_t	    ist;
+    uint8_t     attributes;
+    uint16_t    isr_mid;
+    uint32_t    isr_high;
+    uint32_t    reserved;
+} __attribute__((packed)) idt_entry;
+
+typedef struct {
+    uint16_t	limit;
+    uint64_t	base;
+} __attribute__((packed)) idtr;
+
+static idt_entry idt[256];
+static idtr idtr_;
+
+typedef struct
+{
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t base_middle;
+    uint8_t access;
+    uint8_t flag_limit;
+    uint8_t base_high;
+} __attribute__((packed)) gdt_entry;
+
+typedef struct
+{
+    uint16_t limit;
+    uint64_t base;
+} __attribute__((packed)) gdtr;
+
+static gdt_entry gdt[3];
+static gdtr gdtr_;
 
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
 static inline UINT32 inl(uint16_t port)
@@ -80,6 +128,7 @@ static inline void outb(uint16_t port, uint8_t val)
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
 void print(char *c, UINT32 *framebuffer, UINT32 width);
 void panic(char *message, UINT32 *framebuffer);
+void exception();
 void printn(char *c, UINT32 *framebuffer, size_t n);
 void putchar(char c, UINT32 *framebuffer);
 void putnumber(INT64 num, UINT32 *framebuffer);
@@ -92,11 +141,13 @@ void write_to_address(UINT64 addr, void *data, size_t size);
 uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
 uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
 void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write);
+void idt_init();
+void gdt_init();
 
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
-    UINT32 *framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
+    framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
     UINT32 height = params.graphics_mode.Info->VerticalResolution;
     width = params.graphics_mode.Info->PixelsPerScanLine;
     EFI_MEMORY_DESCRIPTOR *memory_desc = find_memory_start(&params.map);
@@ -121,7 +172,8 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
             framebuffer[y * width + x] = 0xFF000000; //Red AARRGGBB
         }
     }
-
+    gdt_init();
+    idt_init();
     printf(framebuffer, "Characters %ix%i\n", letters_available, rows_available);
     printf(framebuffer, "Memory available %iMB\n", memory_available/(1024 * 1024));
     printf(framebuffer, "Number of table services %i\n", params.NumberOfTableEntries);
@@ -466,4 +518,136 @@ void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uin
               (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
         outl(0xCF8, address);
         outw(0xCFC + (offset & 2), to_write);
+}
+
+ISR_NO_ERR_STUB(0);
+ISR_NO_ERR_STUB(1);
+ISR_NO_ERR_STUB(2);
+ISR_NO_ERR_STUB(3);
+ISR_NO_ERR_STUB(4);
+ISR_NO_ERR_STUB(5);
+ISR_NO_ERR_STUB(6);
+ISR_NO_ERR_STUB(7);
+ISR_ERR_STUB(8);
+ISR_NO_ERR_STUB(9);
+ISR_ERR_STUB(10);
+ISR_ERR_STUB(11);
+ISR_ERR_STUB(12);
+ISR_ERR_STUB(13);
+ISR_ERR_STUB(14);
+ISR_NO_ERR_STUB(15);
+ISR_NO_ERR_STUB(16);
+ISR_ERR_STUB(17);
+ISR_NO_ERR_STUB(18);
+ISR_NO_ERR_STUB(19);
+ISR_NO_ERR_STUB(20);
+ISR_NO_ERR_STUB(21);
+ISR_NO_ERR_STUB(22);
+ISR_NO_ERR_STUB(23);
+ISR_NO_ERR_STUB(24);
+ISR_NO_ERR_STUB(25);
+ISR_NO_ERR_STUB(26);
+ISR_NO_ERR_STUB(27);
+ISR_NO_ERR_STUB(28);
+ISR_NO_ERR_STUB(29);
+ISR_ERR_STUB(30);
+ISR_NO_ERR_STUB(31);
+
+static void *isr_stub_table[32] =
+{
+    isr_stub_0, isr_stub_1, isr_stub_2, isr_stub_3,
+    isr_stub_4, isr_stub_5, isr_stub_6, isr_stub_7,
+    isr_stub_8, isr_stub_9, isr_stub_10, isr_stub_11,
+    isr_stub_12, isr_stub_13, isr_stub_14, isr_stub_15,
+    isr_stub_16, isr_stub_17, isr_stub_18, isr_stub_19,
+    isr_stub_20, isr_stub_21, isr_stub_22, isr_stub_23,
+    isr_stub_24, isr_stub_25, isr_stub_26, isr_stub_27,
+    isr_stub_28, isr_stub_29, isr_stub_30, isr_stub_31
+};
+
+
+void exception()
+{
+    panic("Exception!", framebuffer);
+    //__asm__ volatile ("cli; hlt");
+}
+
+void idt_init()
+{
+    idtr_.base = (uintptr_t)&idt[0];
+    idtr_.limit = (uint16_t)sizeof(idt_entry) * 32 - 1;
+    isr_stub_table[0] = (void *)isr_stub_0;
+    isr_stub_table[1] = (void *)isr_stub_1;
+    isr_stub_table[2] = (void *)isr_stub_2;
+    isr_stub_table[3] = (void *)isr_stub_3;
+    isr_stub_table[4] = (void *)isr_stub_4;
+    isr_stub_table[5] = (void *)isr_stub_5;
+    isr_stub_table[6] = (void *)isr_stub_6;
+    isr_stub_table[7] = (void *)isr_stub_7;
+    isr_stub_table[8] = (void *)isr_stub_8;
+    isr_stub_table[9] = (void *)isr_stub_9;
+    isr_stub_table[10] = (void *)isr_stub_10;
+    isr_stub_table[11] = (void *)isr_stub_11;
+    isr_stub_table[12] = (void *)isr_stub_12;
+    isr_stub_table[13] = (void *)isr_stub_13;
+    isr_stub_table[14] = (void *)isr_stub_14;
+    isr_stub_table[15] = (void *)isr_stub_15;
+    isr_stub_table[16] = (void *)isr_stub_16;
+    isr_stub_table[17] = (void *)isr_stub_17;
+    isr_stub_table[18] = (void *)isr_stub_18;
+    isr_stub_table[19] = (void *)isr_stub_19;
+    isr_stub_table[20] = (void *)isr_stub_20;
+    isr_stub_table[21] = (void *)isr_stub_21;
+    isr_stub_table[22] = (void *)isr_stub_22;
+    isr_stub_table[23] = (void *)isr_stub_23;
+    isr_stub_table[24] = (void *)isr_stub_24;
+    isr_stub_table[25] = (void *)isr_stub_25;
+    isr_stub_table[26] = (void *)isr_stub_26;
+    isr_stub_table[27] = (void *)isr_stub_27;
+    isr_stub_table[28] = (void *)isr_stub_28;
+    isr_stub_table[29] = (void *)isr_stub_29;
+    isr_stub_table[30] = (void *)isr_stub_30;
+    isr_stub_table[31] = (void *)isr_stub_31;
+
+    for (int i = 0; i < 32; i++)
+    {
+        idt_entry *descriptor = &idt[i];
+
+        descriptor->isr_low = (uint64_t)isr_stub_table[i] & 0xFFFF;
+        descriptor->kernel_cs = 0x8;
+        descriptor->ist = 0;
+        descriptor->attributes = 0x8E;
+        descriptor->isr_mid = ((uint64_t)isr_stub_table[i] >> 16) & 0xFFFF;
+        descriptor->isr_high = ((uint64_t)isr_stub_table[i] >> 32) & 0xFFFFFFFF;
+        descriptor->reserved = 0;
+    }
+
+    __asm__ volatile ("lidt %0" : : "m"(idtr_));
+    __asm__ volatile ("sti");
+}
+
+void gdt_init()
+{
+    __asm__ volatile("cli");
+    gdt[0] = (gdt_entry){0, 0, 0, 0, 0, 0};
+
+    gdt[1].limit_low = 0xFFFF;
+    gdt[1].base_low = 0;
+    gdt[1].base_middle = 0;
+    gdt[1].access = 0x9A;
+    gdt[1].flag_limit = 0xAF;
+    gdt[1].base_high = 0;
+
+    gdt[2].limit_low = 0xFFFF;
+    gdt[2].base_low = 0;
+    gdt[2].base_middle = 0;
+    gdt[2].access = 0x92;
+    gdt[2].flag_limit = 0xCF;
+    gdt[2].base_high = 0;
+
+    gdtr_.limit = sizeof(gdt) - 1;
+    gdtr_.base = (uint64_t)&gdt;
+    
+    __asm__ volatile("lgdt %0" : : "m"(gdtr_));
+    __asm__ volatile("pushq $0x08\n leaq 1f(%%rip), %%rax \n pushq %%rax\n lretq\n 1:\n mov $0x10, %%ax\n mov %%ax, %%ds\n mov %%ax, %%es\n mov %%ax, %%fs\n mov %%ax, %%gs\n mov %%ax, %%ss\n" :::"rax", "ax");
 }

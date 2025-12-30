@@ -14,7 +14,7 @@ fclean: clean
 re: fclean all
 
 kernel.bin: kernel/main.c
-	clang -c ${FLAGS} -fPIE -o kernel.o $<
+	clang -c ${FLAGS} -mgeneral-regs-only -fPIE -o kernel.o $<
 	ld -nostdlib -e kernel_main --oformat binary -o $@ kernel.o
 	cp $@ internal-disk/EFI/kernel/kernel.bin
 

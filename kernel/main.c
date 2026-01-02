@@ -143,6 +143,19 @@ uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t 
 void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write);
 void idt_init();
 void gdt_init();
+void pic_init();
+static inline unsigned char are_interrupts_enabled()
+{
+    unsigned long flags;
+    asm volatile ( "pushf\n\t"
+                   "pop %0"
+                   : "=g"(flags) );
+    return flags & (1 << 9);
+}
+static inline void io_wait(void)
+{
+    outb(0x80, 0);
+}
 
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
@@ -173,7 +186,9 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         }
     }
     gdt_init();
+    pic_init();
     idt_init();
+    printf(framebuffer, "Are intrrupts enabled? %i\n", are_interrupts_enabled());
     printf(framebuffer, "Characters %ix%i\n", letters_available, rows_available);
     printf(framebuffer, "Memory available %iMB\n", memory_available/(1024 * 1024));
     printf(framebuffer, "Number of table services %i\n", params.NumberOfTableEntries);
@@ -553,7 +568,20 @@ ISR_NO_ERR_STUB(29);
 ISR_ERR_STUB(30);
 ISR_NO_ERR_STUB(31);
 
-static void *isr_stub_table[32] =
+__attribute__((interrupt))
+void timer(void *stack_frame)
+{
+    printf(framebuffer, "Timer!");
+    outb(0x20, 0x20); 
+}
+
+__attribute((interrupt))
+void key_pressed(void *stack_frame)
+{
+    outb(0x20, 0x20);
+}
+
+static void *isr_stub_table[34] =
 {
     isr_stub_0, isr_stub_1, isr_stub_2, isr_stub_3,
     isr_stub_4, isr_stub_5, isr_stub_6, isr_stub_7,
@@ -562,7 +590,7 @@ static void *isr_stub_table[32] =
     isr_stub_16, isr_stub_17, isr_stub_18, isr_stub_19,
     isr_stub_20, isr_stub_21, isr_stub_22, isr_stub_23,
     isr_stub_24, isr_stub_25, isr_stub_26, isr_stub_27,
-    isr_stub_28, isr_stub_29, isr_stub_30, isr_stub_31
+    isr_stub_28, isr_stub_29, isr_stub_30, isr_stub_31, timer, key_pressed
 };
 
 
@@ -575,7 +603,7 @@ void exception()
 void idt_init()
 {
     idtr_.base = (uintptr_t)&idt[0];
-    idtr_.limit = (uint16_t)sizeof(idt_entry) * 32 - 1;
+    idtr_.limit = (uint16_t)sizeof(idt_entry) * 34 - 1;
     isr_stub_table[0] = (void *)isr_stub_0;
     isr_stub_table[1] = (void *)isr_stub_1;
     isr_stub_table[2] = (void *)isr_stub_2;
@@ -608,8 +636,10 @@ void idt_init()
     isr_stub_table[29] = (void *)isr_stub_29;
     isr_stub_table[30] = (void *)isr_stub_30;
     isr_stub_table[31] = (void *)isr_stub_31;
-
-    for (int i = 0; i < 32; i++)
+    isr_stub_table[32] = (void *)timer;
+    isr_stub_table[33] = (void *)key_pressed;
+    
+    for (int i = 0; i < 34; i++)
     {
         idt_entry *descriptor = &idt[i];
 
@@ -650,4 +680,27 @@ void gdt_init()
     
     __asm__ volatile("lgdt %0" : : "m"(gdtr_));
     __asm__ volatile("pushq $0x08\n leaq 1f(%%rip), %%rax \n pushq %%rax\n lretq\n 1:\n mov $0x10, %%ax\n mov %%ax, %%ds\n mov %%ax, %%es\n mov %%ax, %%fs\n mov %%ax, %%gs\n mov %%ax, %%ss\n" :::"rax", "ax");
+}
+
+void pic_init()
+{
+    outb(0x20, 0x10 | 0x01);
+    io_wait();
+    outb(0xA0, 0x10 | 0x01);
+    io_wait();
+    outb(0x20 + 1, 32);
+    io_wait();
+    outb(0xA0 + 1, 40);
+    io_wait();
+    outb(0x20 + 1, 1 << 2);
+    io_wait();
+    outb(0xA0 + 1, 2);
+    io_wait();
+    outb(0x20 + 1, 0x01);
+    io_wait();
+    outb(0xA0 + 1, 0x01);
+    io_wait();
+
+    outb(0x20 + 1, 0);
+    outb(0xA0 + 1, 0);
 }

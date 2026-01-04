@@ -1,6 +1,8 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
+#include <stdint.h>
+#include <sys/types.h>
 #define ISR_ERR_STUB(n) __attribute__((interrupt))\
                                                     void isr_stub_##n(void *stack_frame, unsigned long code)\
                                                     {\
@@ -85,6 +87,9 @@ typedef struct
 
 static gdt_entry gdt[3];
 static gdtr gdtr_;
+char rtl8139_interrupt;
+char rtl8139_nic_number;
+uint32_t rtl8139_io_addr;
 
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
 static inline UINT32 inl(uint16_t port)
@@ -157,14 +162,13 @@ static inline void io_wait(void)
     outb(0x80, 0);
 }
 
-
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
     framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
     UINT32 height = params.graphics_mode.Info->VerticalResolution;
     width = params.graphics_mode.Info->PixelsPerScanLine;
     EFI_MEMORY_DESCRIPTOR *memory_desc = find_memory_start(&params.map);
-    char *rx_buffer = malloc(8192 + 16);
+    char *rx_buffer = malloc(8192 + 16 + 1500); //WRAP is 1
     memory_used = 0;
     memory_available = memory_desc->NumberOfPages * 4096;
     memory = (char *)memory_desc->PhysicalStart;
@@ -249,12 +253,20 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     {
         uint32_t header_type_ = read_from_pci_whole(0, dev_found, 0, 0xC);
         uint8_t header_type = ((char *)&header_type_)[3];
+        rtl8139_interrupt = 0;
+        rtl8139_nic_number = 0;
+        rtl8139_io_addr = 0;
         uint16_t command = read_from_pci(0, dev_found, 0, 0x4);
         //TODO Initialize RTL8139 properly
         printf(framebuffer, "header type %i\n", header_type);
         if (header_type != 0)
             panic("Device is not as expected", framebuffer);
         uint32_t io_addr = 0x0;
+        uint32_t last_offset = read_from_pci_whole(0, dev_found, 0, 0x3C);
+        uint8_t irq_channel = 0;
+        memcpy(&irq_channel, &last_offset, sizeof(uint8_t));
+        rtl8139_nic_number = irq_channel - 9;
+        printf(framebuffer, "irq channel of device is %i %i\n", irq_channel, rtl8139_nic_number);
         for (int i = 0x10; i < 0x24; i += 4)
         {
             uint32_t bar = read_from_pci_whole(0, dev_found, 0, i);
@@ -271,6 +283,7 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         }
         if (!io_addr)
             panic("io port address for RTL8139 not found", framebuffer);
+        rtl8139_io_addr = io_addr;
         printf(framebuffer, "i/o BAR address %x\n", io_addr);
         uint32_t mac1 = (uint32_t)inl(io_addr);
         uint16_t mac2 = (uint16_t)inw(io_addr + 4);
@@ -282,6 +295,10 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         printf(framebuffer, "Resetted RTL8139\n");
         outl(io_addr + 0x30, (uintptr_t)rx_buffer);
         printf(framebuffer, "receive buffer initialized\n");
+        outw(io_addr + 0x3C, 0x0005);
+        printf(framebuffer, "Turned on interrupts for RTL8139\n");
+        outl(io_addr + 0x44, 0xf | (1 << 7));
+        outb(io_addr + 0x37, 0x0C);
     }
     while(1);
 }
@@ -575,13 +592,80 @@ void timer(void *stack_frame)
     outb(0x20, 0x20); 
 }
 
-__attribute((interrupt))
+__attribute__((interrupt))
 void key_pressed(void *stack_frame)
 {
     outb(0x20, 0x20);
 }
 
-static void *isr_stub_table[34] =
+
+__attribute__((interrupt))
+void nic_irq_0(void *ret)
+{
+    if (rtl8139_nic_number == 0)
+    {
+        uint16_t status = inw(rtl8139_io_addr + 0x3E);
+        outw(rtl8139_io_addr + 0x3E, 0x05);
+        if (status & 0x01)
+        {
+            printf(framebuffer, "Receiving a packet\n");
+        }
+        if (status & 0x04)
+        {
+            printf(framebuffer, "Sent a packet\n");
+        }
+        
+        rtl8139_interrupt = 1;
+        printf(framebuffer, "Got RTL8139 interrupt\n");
+    }
+}
+
+
+__attribute__((interrupt))
+void nic_irq_1(void *ret)
+{  
+    if (rtl8139_nic_number == 1)
+    {
+        uint16_t status = inw(rtl8139_io_addr + 0x3E);
+        outw(rtl8139_io_addr + 0x3E, 0x05);
+        if (status & 0x01)
+        {
+            printf(framebuffer, "Receiving a packet\n");
+        }
+        if (status & 0x04)
+        {
+            printf(framebuffer, "Sent a packet\n");
+        }
+        
+        rtl8139_interrupt = 1;
+        printf(framebuffer, "Got RTL8139 interrupt\n");
+    }
+}
+
+
+__attribute__((interrupt))
+void nic_irq_2(void *ret)
+{
+    if (rtl8139_nic_number == 2)
+    {
+        uint16_t status = inw(rtl8139_io_addr + 0x3E);
+        outw(rtl8139_io_addr + 0x3E, 0x05);
+        if (status & 0x01)
+        {
+            printf(framebuffer, "Receiving a packet\n");
+        }
+        if (status & 0x04)
+        {
+            printf(framebuffer, "Sent a packet\n");
+        }
+        
+        rtl8139_interrupt = 1;
+        printf(framebuffer, "Got RTL8139 interrupt\n");
+    }
+}
+
+
+static void *isr_stub_table[47] =
 {
     isr_stub_0, isr_stub_1, isr_stub_2, isr_stub_3,
     isr_stub_4, isr_stub_5, isr_stub_6, isr_stub_7,
@@ -603,7 +687,7 @@ void exception()
 void idt_init()
 {
     idtr_.base = (uintptr_t)&idt[0];
-    idtr_.limit = (uint16_t)sizeof(idt_entry) * 34 - 1;
+    idtr_.limit = (uint16_t)sizeof(idt_entry) * 44 - 1;
     isr_stub_table[0] = (void *)isr_stub_0;
     isr_stub_table[1] = (void *)isr_stub_1;
     isr_stub_table[2] = (void *)isr_stub_2;
@@ -638,8 +722,11 @@ void idt_init()
     isr_stub_table[31] = (void *)isr_stub_31;
     isr_stub_table[32] = (void *)timer;
     isr_stub_table[33] = (void *)key_pressed;
+    isr_stub_table[41] = (void *)nic_irq_0;
+    isr_stub_table[42] = (void *)nic_irq_1;
+    isr_stub_table[43] = (void *)nic_irq_2;
     
-    for (int i = 0; i < 34; i++)
+    for (int i = 0; i < 44; i++)
     {
         idt_entry *descriptor = &idt[i];
 

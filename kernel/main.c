@@ -1,8 +1,8 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
-#include <stdint.h>
-#include <sys/types.h>
+#include "utils.h"
+
 #define ISR_ERR_STUB(n) __attribute__((interrupt))\
                                                     void isr_stub_##n(void *stack_frame, unsigned long code)\
                                                     {\
@@ -13,6 +13,11 @@
                                                       {\
                                                           exception();\
                                                       }
+#define IRQ_HANDLER(n) __attribute__((interrupt))\
+                                                 void irq_handler_##n(void *stack_frame)\
+                                                 {\
+                                                     printf(framebuffer, "Got irq\n");\
+                                                 }
 #define GET_ISR(n) isr_stub_##n()
 int memory_used = 0;
 UINT64 memory_available = 0;
@@ -140,8 +145,6 @@ void putnumber(INT64 num, UINT32 *framebuffer);
 void puthex(UINT64 num, UINT32 *framebuffer);
 void printf(UINT32 *framebuffer, const char *format, ...);
 void *malloc(UINT64 size);
-int memcmp(const void *s1, const void *s2, size_t n);
-void *memcpy(void *dst, void *src, size_t n);
 void write_to_address(UINT64 addr, void *data, size_t size);
 uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
 uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
@@ -366,7 +369,7 @@ void panic(char *message, UINT32 *framebuffer)
 {
     print("PANIC! ", framebuffer, width);
     print(message, framebuffer, width);
-    asm( "hlt" );
+    asm( "cli; hlt" );
 }
 
 void putchar(char c, UINT32 *framebuffer)
@@ -486,35 +489,6 @@ void *malloc(UINT64 size)
     return NULL;
 }
 
-int memcmp(const void *s1, const void *s2, size_t n)
-{
-    char *s1_ = (char *)s1;
-    char *s2_ = (char *)s2;
-
-    for (int i = 0; i < n; i++)
-    {
-        if ((unsigned char)s1_[i] != (unsigned char)s2_[i])
-            return (unsigned char)s1_[i] - (unsigned char)s2_[i];
-    }
-    return 0;
-}
-
-void *memcpy(void *dst, void *src, size_t n)
-{
-    int i = 0;
-    char *ret = dst;
-    char *d = dst;
-    char *s = src;
-    while(i < n)
-    {
-        *d = *s;
-        d++;
-        s++;
-        i++;
-    }
-    return ret;
-}
-
 void write_to_address(UINT64 addr, void *data, size_t size)
 {
     char *a = (char *)*(UINT64 *)&addr;
@@ -584,6 +558,17 @@ ISR_NO_ERR_STUB(28);
 ISR_NO_ERR_STUB(29);
 ISR_ERR_STUB(30);
 ISR_NO_ERR_STUB(31);
+IRQ_HANDLER(2);
+IRQ_HANDLER(3);
+IRQ_HANDLER(4);
+IRQ_HANDLER(5);
+IRQ_HANDLER(6);
+IRQ_HANDLER(7);
+IRQ_HANDLER(8);
+IRQ_HANDLER(12);
+IRQ_HANDLER(13);
+IRQ_HANDLER(14);
+IRQ_HANDLER(15);
 
 __attribute__((interrupt))
 void timer(void *stack_frame)
@@ -665,7 +650,7 @@ void nic_irq_2(void *ret)
 }
 
 
-static void *isr_stub_table[47] =
+static void *isr_stub_table[48] =
 {
     isr_stub_0, isr_stub_1, isr_stub_2, isr_stub_3,
     isr_stub_4, isr_stub_5, isr_stub_6, isr_stub_7,
@@ -687,7 +672,7 @@ void exception()
 void idt_init()
 {
     idtr_.base = (uintptr_t)&idt[0];
-    idtr_.limit = (uint16_t)sizeof(idt_entry) * 44 - 1;
+    idtr_.limit = (uint16_t)sizeof(idt_entry) * 48 - 1;
     isr_stub_table[0] = (void *)isr_stub_0;
     isr_stub_table[1] = (void *)isr_stub_1;
     isr_stub_table[2] = (void *)isr_stub_2;
@@ -722,11 +707,22 @@ void idt_init()
     isr_stub_table[31] = (void *)isr_stub_31;
     isr_stub_table[32] = (void *)timer;
     isr_stub_table[33] = (void *)key_pressed;
+    isr_stub_table[34] = (void *)irq_handler_2;
+    isr_stub_table[35] = (void *)irq_handler_3;
+    isr_stub_table[36] = (void *)irq_handler_4;
+    isr_stub_table[37] = (void *)irq_handler_5;
+    isr_stub_table[38] = (void *)irq_handler_6;
+    isr_stub_table[39] = (void *)irq_handler_7;
+    isr_stub_table[40] = (void *)irq_handler_8;
     isr_stub_table[41] = (void *)nic_irq_0;
     isr_stub_table[42] = (void *)nic_irq_1;
     isr_stub_table[43] = (void *)nic_irq_2;
+    isr_stub_table[44] = (void *)irq_handler_12;
+    isr_stub_table[45] = (void *)irq_handler_13;
+    isr_stub_table[46] = (void *)irq_handler_14;
+    isr_stub_table[47] = (void *)irq_handler_15;
     
-    for (int i = 0; i < 44; i++)
+    for (int i = 0; i < 48; i++)
     {
         idt_entry *descriptor = &idt[i];
 

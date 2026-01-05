@@ -1,5 +1,5 @@
 #include <stdarg.h>
-#include "gnu-efi-code/inc/efi.h"
+#include "gnu-efi/inc/efi.h"
 
 void putchar(EFI_SYSTEM_TABLE *system_table, CHAR16 c)
 {

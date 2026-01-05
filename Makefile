@@ -16,7 +16,9 @@ re: fclean all
 kernel.bin: kernel/main.c
 	clang -c ${FLAGS} -mgeneral-regs-only -fPIE -o kernel.o $<
 	clang -c ${FLAGS} -mgeneral-regs-only -fPIE -o utils.o kernel/utils.c
-	ld -T kernel/kernel.ld -nostdlib -e kernel_main --oformat binary -o $@ kernel.o utils.o
+	clang -c ${FLAGS} -mgeneral-regs-only -fPIE -o allocation.o kernel/allocation.c
+	clang -c ${FLAGS} -mgeneral-regs-only -fPIE -o rtl8139.o kernel/rtl8139.c
+	ld -T kernel/kernel.ld -nostdlib -e kernel_main --oformat binary -o $@ kernel.o utils.o allocation.o rtl8139.o
 	cp $@ internal-disk/EFI/kernel/kernel.bin
 
 .PHONY: all clean fclean re

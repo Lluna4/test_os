@@ -2,6 +2,8 @@
 #include "font.h"
 #include <stdarg.h>
 #include "utils.h"
+#include "allocation.h"
+#include "rtl8139.h"
 
 #define ISR_ERR_STUB(n) __attribute__((interrupt))\
                                                     void isr_stub_##n(void *stack_frame, unsigned long code)\
@@ -16,12 +18,9 @@
 #define IRQ_HANDLER(n) __attribute__((interrupt))\
                                                  void irq_handler_##n(void *stack_frame)\
                                                  {\
-                                                     printf(framebuffer, "Got irq\n");\
+                                                     outb(0x20, 0x20);\
                                                  }
 #define GET_ISR(n) isr_stub_##n()
-int memory_used = 0;
-UINT64 memory_available = 0;
-char *memory = NULL;
 int letters_available = 0;
 int letters_used = 0;
 int rows_available = 0;
@@ -29,23 +28,7 @@ int rows_used = 0;
 UINT32 width;
 UINT32 *framebuffer;
 
-struct memory_map
-{
-    UINTN size;
-    EFI_MEMORY_DESCRIPTOR *mem_map;
-    UINTN key;
-    UINTN descriptor_size;
-    UINT32 descriptor_version;
-};
 
-struct allocated_memory
-{
-    void *start_addr;
-    void *finish_addr;
-};
-
-struct allocated_memory *memory_allocations;
-int memory_allocations_index;
 
 typedef struct 
 {
@@ -92,48 +75,8 @@ typedef struct
 
 static gdt_entry gdt[3];
 static gdtr gdtr_;
-char rtl8139_interrupt;
-char rtl8139_nic_number;
-uint32_t rtl8139_io_addr;
 
 EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map);
-static inline UINT32 inl(uint16_t port)
-{
-    uint32_t ret;
-    __asm__ volatile ("inl %1, %0": "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-
-static inline UINT16 inw(uint16_t port)
-{
-    uint16_t ret;
-    __asm__ volatile ("inw %1, %0": "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-static inline UINT8 inb(uint16_t port)
-{
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0": "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-static inline void outl(uint16_t port, uint32_t val)
-{
-    __asm__ volatile ("outl %0, %1" : : "a"(val), "Nd"(port));
-}
-
-
-static inline void outw(uint16_t port, uint16_t val)
-{
-    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline void outb(uint16_t port, uint8_t val)
-{
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
 
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start);
 void print(char *c, UINT32 *framebuffer, UINT32 width);
@@ -146,9 +89,6 @@ void puthex(UINT64 num, UINT32 *framebuffer);
 void printf(UINT32 *framebuffer, const char *format, ...);
 void *malloc(UINT64 size);
 void write_to_address(UINT64 addr, void *data, size_t size);
-uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
-uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
-void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write);
 void idt_init();
 void gdt_init();
 void pic_init();
@@ -160,26 +100,13 @@ static inline unsigned char are_interrupts_enabled()
                    : "=g"(flags) );
     return flags & (1 << 9);
 }
-static inline void io_wait(void)
-{
-    outb(0x80, 0);
-}
 
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
     framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
     UINT32 height = params.graphics_mode.Info->VerticalResolution;
     width = params.graphics_mode.Info->PixelsPerScanLine;
-    EFI_MEMORY_DESCRIPTOR *memory_desc = find_memory_start(&params.map);
-    char *rx_buffer = malloc(8192 + 16 + 1500); //WRAP is 1
-    memory_used = 0;
-    memory_available = memory_desc->NumberOfPages * 4096;
-    memory = (char *)memory_desc->PhysicalStart;
-
-    memory_allocations = (struct allocated_memory *)memory;
-    memory += 4096;
-    memory_available = (memory_desc->NumberOfPages - 1) * 4096;
-    memory_allocations_index = 0;
+    memory_init(&params.map);
     letters_available = (width-30)/9;
     rows_available = height/15;
     letters_used = 0;
@@ -197,7 +124,7 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     idt_init();
     printf(framebuffer, "Are intrrupts enabled? %i\n", are_interrupts_enabled());
     printf(framebuffer, "Characters %ix%i\n", letters_available, rows_available);
-    printf(framebuffer, "Memory available %iMB\n", memory_available/(1024 * 1024));
+    printf(framebuffer, "Memory available %iMB\n", get_available_memory()/(1024 * 1024));
     printf(framebuffer, "Number of table services %i\n", params.NumberOfTableEntries);
     char *acpi_table = NULL;
     for (int i = 0; i < params.NumberOfTableEntries; i++)
@@ -235,93 +162,12 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         printn(address, framebuffer, 4);
         printf(framebuffer, "\n");
     }
-    UINT64 data_addr = 0xCFC;
-    char found = 0;
-    int dev_found = 0;
-    for (int device = 0; device < 32; device++)
-    {
-        uint16_t vendor_id = read_from_pci(0, device, 0, 0);
-        uint16_t device_id = read_from_pci(0, device, 0, 2);
-        printf(framebuffer,"pci dev %i vendor id %x device id %x\n", device, vendor_id, device_id);
-        if (vendor_id == 0x10EC && device_id == 0x8139)
-        {
-            printf(framebuffer, "Found RTL8139\n");
-            found = 1;
-            dev_found = device;
-            break;
-        }
-        
-    }
-    if (found)
-    {
-        uint32_t header_type_ = read_from_pci_whole(0, dev_found, 0, 0xC);
-        uint8_t header_type = ((char *)&header_type_)[3];
-        rtl8139_interrupt = 0;
-        rtl8139_nic_number = 0;
-        rtl8139_io_addr = 0;
-        uint16_t command = read_from_pci(0, dev_found, 0, 0x4);
-        //TODO Initialize RTL8139 properly
-        printf(framebuffer, "header type %i\n", header_type);
-        if (header_type != 0)
-            panic("Device is not as expected", framebuffer);
-        uint32_t io_addr = 0x0;
-        uint32_t last_offset = read_from_pci_whole(0, dev_found, 0, 0x3C);
-        uint8_t irq_channel = 0;
-        memcpy(&irq_channel, &last_offset, sizeof(uint8_t));
-        rtl8139_nic_number = irq_channel - 9;
-        printf(framebuffer, "irq channel of device is %i %i\n", irq_channel, rtl8139_nic_number);
-        for (int i = 0x10; i < 0x24; i += 4)
-        {
-            uint32_t bar = read_from_pci_whole(0, dev_found, 0, i);
-            if (i == 0x10)
-                printf(framebuffer, "Bar %i: 0x%x\n", 0, bar);
-            else
-                printf(framebuffer, "Bar %i: 0x%x\n", (i - 0x10)/4, bar);
-            if (bar & (1 << 0) && bar != 0x0)
-            {
-                printf(framebuffer, "I/O port bar found %x\n", bar);
-                io_addr = bar & 0xFFFFFFFC;
-                break;
-            }
-        }
-        if (!io_addr)
-            panic("io port address for RTL8139 not found", framebuffer);
-        rtl8139_io_addr = io_addr;
-        printf(framebuffer, "i/o BAR address %x\n", io_addr);
-        uint32_t mac1 = (uint32_t)inl(io_addr);
-        uint16_t mac2 = (uint16_t)inw(io_addr + 4);
-        printf(framebuffer, "mac address %x%x\n", mac2, mac1);
-        outb(io_addr + 0x52, 0x0);
-        printf(framebuffer, "Turned on RTL8139\n");
-        outb(io_addr + 0x37, 0x10);
-        while((inb(io_addr + 0x37) & 0x10) != 0);
-        printf(framebuffer, "Resetted RTL8139\n");
-        outl(io_addr + 0x30, (uintptr_t)rx_buffer);
-        printf(framebuffer, "receive buffer initialized\n");
-        outw(io_addr + 0x3C, 0x0005);
-        printf(framebuffer, "Turned on interrupts for RTL8139\n");
-        outl(io_addr + 0x44, 0xf | (1 << 7));
-        outb(io_addr + 0x37, 0x0C);
-    }
+    int ret = rtl8139_init(framebuffer, printf);
+	if (ret != 0)
+		panic("rtl8139 init failed!", framebuffer);
     while(1);
 }
 
-EFI_MEMORY_DESCRIPTOR *find_memory_start(struct memory_map *map)
-{
-    EFI_MEMORY_DESCRIPTOR *largest = NULL;
-    for (int i = 0; i < map->size / map->descriptor_size; i++)
-    {
-        EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)map->mem_map + (i * map->descriptor_size));
-        if (desc->Type == EfiConventionalMemory)
-        {
-            if (!largest)
-                largest = desc;
-            else if (largest->NumberOfPages < desc->NumberOfPages)
-                largest = desc;
-        }
-    }
-    return largest;
-}
 
 void render_font(char c, UINT32 *framebuffer, UINT32 width, int fb_y_start, int fb_x_start)
 {
@@ -474,56 +320,11 @@ void printf(UINT32 *framebuffer, const char *format, ...)
     }
 }
 
-void *malloc(UINT64 size)
-{
-    int allocations_index = memory_allocations_index;
-    if (memory_available > size && memory_allocations_index <= 256)
-    {
-        memory_allocations[memory_allocations_index].start_addr = memory;
-        memory += size;
-        memory_allocations[memory_allocations_index].finish_addr = memory;
-        memory_available -= size;
-        memory_allocations_index++;
-        return memory_allocations[allocations_index].start_addr;
-    }
-    return NULL;
-}
 
 void write_to_address(UINT64 addr, void *data, size_t size)
 {
     char *a = (char *)*(UINT64 *)&addr;
     memcpy(a, data, size);
-}
-
-
-uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset)
-{
-        uint32_t address = (uint32_t)((0 << 16) | (device << 11) |
-              (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
-        outl(0xCF8, address);
-        //write_to_address(0xCF8, &address, 4);
-        uint16_t ret = (uint16_t)((inl(0xCFC) >> ((offset & 2) * 8)) & 0xFFFF);
-        return ret;
-}
-
-
-uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset)
-{
-        uint32_t address = (uint32_t)((bus << 16) | (device << 11) |
-              (func << 8) | (offset & 0xFC) | ((uint32_t)0x80000000));
-        outl(0xCF8, address);
-        //write_to_address(0xCF8, &address, 4);
-        uint32_t ret = (uint32_t)inl(0xCFC);
-        return ret;
-}
-
-
-void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write)
-{
-        uint32_t address = (uint32_t)((0 << 16) | (device << 11) |
-              (0 << 8) | (0 & 0xFC) | ((uint32_t)0x80000000));
-        outl(0xCF8, address);
-        outw(0xCFC + (offset & 2), to_write);
 }
 
 ISR_NO_ERR_STUB(0);
@@ -581,72 +382,6 @@ __attribute__((interrupt))
 void key_pressed(void *stack_frame)
 {
     outb(0x20, 0x20);
-}
-
-
-__attribute__((interrupt))
-void nic_irq_0(void *ret)
-{
-    if (rtl8139_nic_number == 0)
-    {
-        uint16_t status = inw(rtl8139_io_addr + 0x3E);
-        outw(rtl8139_io_addr + 0x3E, 0x05);
-        if (status & 0x01)
-        {
-            printf(framebuffer, "Receiving a packet\n");
-        }
-        if (status & 0x04)
-        {
-            printf(framebuffer, "Sent a packet\n");
-        }
-        
-        rtl8139_interrupt = 1;
-        printf(framebuffer, "Got RTL8139 interrupt\n");
-    }
-}
-
-
-__attribute__((interrupt))
-void nic_irq_1(void *ret)
-{  
-    if (rtl8139_nic_number == 1)
-    {
-        uint16_t status = inw(rtl8139_io_addr + 0x3E);
-        outw(rtl8139_io_addr + 0x3E, 0x05);
-        if (status & 0x01)
-        {
-            printf(framebuffer, "Receiving a packet\n");
-        }
-        if (status & 0x04)
-        {
-            printf(framebuffer, "Sent a packet\n");
-        }
-        
-        rtl8139_interrupt = 1;
-        printf(framebuffer, "Got RTL8139 interrupt\n");
-    }
-}
-
-
-__attribute__((interrupt))
-void nic_irq_2(void *ret)
-{
-    if (rtl8139_nic_number == 2)
-    {
-        uint16_t status = inw(rtl8139_io_addr + 0x3E);
-        outw(rtl8139_io_addr + 0x3E, 0x05);
-        if (status & 0x01)
-        {
-            printf(framebuffer, "Receiving a packet\n");
-        }
-        if (status & 0x04)
-        {
-            printf(framebuffer, "Sent a packet\n");
-        }
-        
-        rtl8139_interrupt = 1;
-        printf(framebuffer, "Got RTL8139 interrupt\n");
-    }
 }
 
 
@@ -714,9 +449,9 @@ void idt_init()
     isr_stub_table[38] = (void *)irq_handler_6;
     isr_stub_table[39] = (void *)irq_handler_7;
     isr_stub_table[40] = (void *)irq_handler_8;
-    isr_stub_table[41] = (void *)nic_irq_0;
+    /*isr_stub_table[41] = (void *)nic_irq_0;
     isr_stub_table[42] = (void *)nic_irq_1;
-    isr_stub_table[43] = (void *)nic_irq_2;
+    isr_stub_table[43] = (void *)nic_irq_2;*/
     isr_stub_table[44] = (void *)irq_handler_12;
     isr_stub_table[45] = (void *)irq_handler_13;
     isr_stub_table[46] = (void *)irq_handler_14;

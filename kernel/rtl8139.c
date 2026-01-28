@@ -5,6 +5,9 @@ char rtl8139_nic_number;
 uint32_t rtl8139_io_addr;
 char *rx_buffer;
 
+static UINT32 *fb;
+void (*printff)(UINT32 *framebuffer, const char *format, ...);
+
 
 int rtl8139_init(UINT32 *framebuffer, void (*printf)(UINT32 *framebuffer, const char *format, ...))
 {
@@ -12,6 +15,8 @@ int rtl8139_init(UINT32 *framebuffer, void (*printf)(UINT32 *framebuffer, const 
     char found = 0;
     int dev_found = 0;
     char *rx_buffer = malloc(8192 + 16 + 1500); //WRAP is 1
+    fb = framebuffer;
+    printff = printf;
     for (int device = 0; device < 32; device++)
     {
         uint16_t vendor_id = read_from_pci(0, device, 0, 0);
@@ -78,4 +83,22 @@ int rtl8139_init(UINT32 *framebuffer, void (*printf)(UINT32 *framebuffer, const 
         outb(io_addr + 0x37, 0x0C);
     }
     return 0;
+}
+
+__attribute__((interrupt))
+void rtl8139_interrupt_fn(void *stack_frame)
+{
+    uint16_t status = inw(rtl8139_io_addr + 0x3E);
+    outw(rtl8139_io_addr + 0x3E, 0x05);
+    if (status & 0x01)
+    {
+        printff(fb, "Receiving a packet\n");
+    }
+    if (status & 0x04)
+    {
+        printff(fb, "Sent a packet\n");
+    }
+    
+    rtl8139_interrupt = 1;
+    printff(fb, "Got RTL8139 interrupt\n");
 }

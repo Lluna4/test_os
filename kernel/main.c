@@ -1,6 +1,7 @@
 #include "../gnu-efi/inc/efi.h"
 #include "font.h"
 #include <stdarg.h>
+#include <stdint.h>
 #include "utils.h"
 #include "allocation.h"
 #include "rtl8139.h"
@@ -27,6 +28,7 @@ int rows_available = 0;
 int rows_used = 0;
 UINT32 width;
 UINT32 *framebuffer;
+uint64_t time;
 
 
 
@@ -111,6 +113,7 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     rows_available = height/15;
     letters_used = 0;
     rows_used = 0;
+    time = 0;
 
     for (INT32 y = 0; y < height; y++)
     {
@@ -374,7 +377,7 @@ IRQ_HANDLER(15);
 __attribute__((interrupt))
 void timer(void *stack_frame)
 {
-    printf(framebuffer, "Timer!");
+    time++;
     outb(0x20, 0x20); 
 }
 
@@ -449,9 +452,9 @@ void idt_init()
     isr_stub_table[38] = (void *)irq_handler_6;
     isr_stub_table[39] = (void *)irq_handler_7;
     isr_stub_table[40] = (void *)irq_handler_8;
-    /*isr_stub_table[41] = (void *)nic_irq_0;
-    isr_stub_table[42] = (void *)nic_irq_1;
-    isr_stub_table[43] = (void *)nic_irq_2;*/
+    isr_stub_table[41] = (void *)rtl8139_interrupt_fn;
+    isr_stub_table[42] = (void *)rtl8139_interrupt_fn;
+    isr_stub_table[43] = (void *)rtl8139_interrupt_fn;
     isr_stub_table[44] = (void *)irq_handler_12;
     isr_stub_table[45] = (void *)irq_handler_13;
     isr_stub_table[46] = (void *)irq_handler_14;
@@ -497,7 +500,17 @@ void gdt_init()
     gdtr_.base = (uint64_t)&gdt;
     
     __asm__ volatile("lgdt %0" : : "m"(gdtr_));
-    __asm__ volatile("pushq $0x08\n leaq 1f(%%rip), %%rax \n pushq %%rax\n lretq\n 1:\n mov $0x10, %%ax\n mov %%ax, %%ds\n mov %%ax, %%es\n mov %%ax, %%fs\n mov %%ax, %%gs\n mov %%ax, %%ss\n" :::"rax", "ax");
+    __asm__ volatile("pushq $0x08\n \
+        leaq 1f(%%rip), %%rax \n \
+        pushq %%rax\n \
+        lretq\n \
+         1:\n \
+        mov $0x10, %%ax\n \
+        mov %%ax, %%ds\n \
+        mov %%ax, %%es\n \
+        mov %%ax, %%fs\n \
+        mov %%ax, %%gs\n \
+        mov %%ax, %%ss\n" :::"rax", "ax");
 }
 
 void pic_init()

@@ -12,4 +12,6 @@ enum RTL8139_INIT_ERROR
 
 int rtl8139_init(UINT32 *framebuffer, void (*printf)(UINT32 *framebuffer, const char *format, ...));
 
+__attribute__((interrupt))
+void rtl8139_interrupt_fn(void *stack_frame);
 #endif

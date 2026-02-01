@@ -20,6 +20,13 @@ void *memcpy(void *dst, void *src, unsigned long long n)
     return dst;
 }
 
+void *memset(void *dst, char n, size_t size)
+{
+    for (int i = 0; i < size; i++)
+        ((char *)dst)[i] = n;
+    return dst;
+}
+
 uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset)
 {
         uint32_t address = (uint32_t)((0 << 16) | (device << 11) |

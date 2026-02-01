@@ -2,6 +2,7 @@
 #include "font.h"
 #include <stdarg.h>
 #include <stdint.h>
+#include <byteswap.h>
 #include "utils.h"
 #include "allocation.h"
 #include "rtl8139.h"
@@ -9,11 +10,13 @@
 #define ISR_ERR_STUB(n) __attribute__((interrupt))\
                                                     void isr_stub_##n(void *stack_frame, unsigned long code)\
                                                     {\
+                                                        printf(framebuffer, "interrupt %i\n", n); \
                                                         exception();\
                                                     }
 #define ISR_NO_ERR_STUB(n) __attribute__((interrupt)) \
                                                       void isr_stub_##n(void *stack_frame)\
                                                       {\
+                                                          printf(framebuffer, "interrupt %i\n", n); \
                                                           exception();\
                                                       }
 #define IRQ_HANDLER(n) __attribute__((interrupt))\
@@ -29,6 +32,8 @@ int rows_used = 0;
 UINT32 width;
 UINT32 *framebuffer;
 uint64_t time;
+rtl8139_dev dev;
+char pkt_recv;
 
 
 
@@ -103,6 +108,32 @@ static inline unsigned char are_interrupts_enabled()
     return flags & (1 << 9);
 }
 
+struct ethernet_header
+{
+    uint8_t dest[6];
+    uint8_t src[6];
+    uint16_t type;
+}__attribute__((packed));
+
+struct arp_packet
+{
+    uint16_t hardware_type;
+    uint16_t protocol_type;
+    uint8_t  hardware_len;
+    uint8_t  protocol_len;
+    uint16_t opcode; // ARP Operation Code
+    uint8_t  source_hw_address[6];
+    uint8_t  source_protocol_address[4];
+    uint8_t  dest_hw_address[6];
+    uint8_t  dest_protocol_address[4];
+}__attribute__((packed));
+
+struct full_arp_packet
+{
+    struct ethernet_header eth;
+    struct arp_packet arp;
+} __attribute__((packed));
+
 void __attribute__((ms_abi)) kernel_main(kernel_params params)
 {
     framebuffer = (UINT32 *)params.graphics_mode.FrameBufferBase;
@@ -114,6 +145,7 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
     letters_used = 0;
     rows_used = 0;
     time = 0;
+    pkt_recv = 0;
 
     for (INT32 y = 0; y < height; y++)
     {
@@ -165,10 +197,58 @@ void __attribute__((ms_abi)) kernel_main(kernel_params params)
         printn(address, framebuffer, 4);
         printf(framebuffer, "\n");
     }
-    int ret = rtl8139_init(framebuffer, printf);
-	if (ret != 0)
+    dev = rtl8139_init(framebuffer, printf);
+
+    struct ethernet_header eth = {0};
+    memcpy(eth.src, dev.mac_addr, 6);
+    eth.dest[0] = 0xFF;
+    eth.dest[1] = 0xFF;
+    eth.dest[2] = 0xFF;
+    eth.dest[3] = 0xFF;
+    eth.dest[4] = 0xFF;
+    eth.dest[5] = 0xFF;
+    eth.type = 0x0806;
+    eth.type = bswap_16(eth.type);
+
+    struct arp_packet pkt = {0};
+    pkt.hardware_type = 0x1;
+    pkt.protocol_type = 0x0800;
+    pkt.hardware_len = 6;
+    pkt.protocol_len = 4;
+    pkt.opcode =  0x0001;
+    memcpy(pkt.source_hw_address, dev.mac_addr, 6);
+    pkt.source_protocol_address[0] = 10;
+    pkt.source_protocol_address[1] = 0;
+    pkt.source_protocol_address[2] = 2;
+    pkt.source_protocol_address[3] = 15;
+    memset(pkt.dest_hw_address, 0, 6);
+    pkt.dest_protocol_address[0] = 10;
+    pkt.dest_protocol_address[1] = 0;
+    pkt.dest_protocol_address[2] = 2;
+    pkt.dest_protocol_address[3] = 2;
+    pkt.hardware_type = bswap_16(pkt.hardware_type);
+    pkt.protocol_type = bswap_16(pkt.protocol_type);
+    pkt.opcode = bswap_16(pkt.opcode);
+	if (dev.err != 0)
 		panic("rtl8139 init failed!", framebuffer);
-    while(1);
+
+    struct full_arp_packet full_pkt = {0};
+    full_pkt.arp = pkt;
+    full_pkt.eth = eth;
+    printf(framebuffer, "Sending packet\n");
+    rtl8139_send(&full_pkt, sizeof(full_pkt), 60);
+    char *buf = malloc(64 + 20);
+    while(1)
+    {
+        if (pkt_recv == 1)
+        {
+            rtl8139_recv(buf, 64 + 20, &pkt_recv);
+            struct full_arp_packet pkt_response;
+            memcpy(&pkt_response, &buf[4], 64);
+            printf(framebuffer, "mac address of 10.0.2.2  %x:%x:%x:%x:%x:%x\n", pkt_response.arp.source_hw_address[0], pkt_response.arp.source_hw_address[1], pkt_response.arp.source_hw_address[2], pkt_response.arp.source_hw_address[3], pkt_response.arp.source_hw_address[4], pkt_response.arp.source_hw_address[5]);
+            pkt_recv = 0;
+        }
+    }
 }
 
 
@@ -374,6 +454,7 @@ IRQ_HANDLER(13);
 IRQ_HANDLER(14);
 IRQ_HANDLER(15);
 
+
 __attribute__((interrupt))
 void timer(void *stack_frame)
 {
@@ -405,6 +486,25 @@ void exception()
 {
     panic("Exception!", framebuffer);
     //__asm__ volatile ("cli; hlt");
+}
+
+__attribute__((interrupt))
+void rtl8139_interrupt_fn(void *stack_frame)
+{
+    uint16_t status = inw(dev.rtl8139_io_addr + 0x3E);
+    outw(dev.rtl8139_io_addr + 0x3E, 0x05);
+    if (status & 0x01)
+    {
+        printf(framebuffer, "Receiving a packet\n");
+        pkt_recv = 1;
+    }
+    if (status & 0x04)
+    {
+        printf(framebuffer, "Sent a packet\n");
+    }
+    
+    printf(framebuffer, "Got RTL8139 interrupt\n");
+    outb(0x20, 0x20);
 }
 
 void idt_init()

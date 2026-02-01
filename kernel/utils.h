@@ -4,6 +4,7 @@
 
 int memcmp(const void *s1, const void *s2, unsigned long long n);
 void *memcpy(void *dst, void *src, unsigned long long n);
+void *memset(void *dst, char n, size_t size);
 uint16_t read_from_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
 uint32_t read_from_pci_whole(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset);
 void write_to_pci(uint8_t bus, uint8_t device, uint8_t func, uint8_t offset, uint16_t to_write);

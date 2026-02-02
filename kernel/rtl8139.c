@@ -111,6 +111,24 @@ rtl8139_dev rtl8139_init(UINT32 *framebuffer, void (*printf)(UINT32 *framebuffer
     return ret;
 }
 
+
+int rtl8139_send_header(void * header, uint32_t header_size, void *packet, uint32_t packet_size)
+{
+    memcpy(tx_buffer, header, header_size);
+    memcpy(&tx_buffer[header_size], packet, packet_size);
+
+    uint32_t size = header_size + packet_size;
+
+    if (size < 60)
+        size = 60;
+
+    outl(rtl8139_io_addr + 0x20, (uintptr_t)tx_buffer);
+    outl(rtl8139_io_addr + 0x10, size);
+
+    return size;
+}
+
+
 int rtl8139_send(void *packet, uint32_t packet_size, uint32_t size)
 {
     memcpy(tx_buffer, packet, packet_size);

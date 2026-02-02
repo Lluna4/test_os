@@ -21,6 +21,7 @@ enum RTL8139_INIT_ERROR
 
 rtl8139_dev rtl8139_init(UINT32 *framebuffer, void (*printf)(UINT32 *framebuffer, const char *format, ...));
 
+int rtl8139_send_header(void * header, uint32_t header_size, void *packet, uint32_t packet_size);
 int rtl8139_send(void *packet, uint32_t packet_size, uint32_t size);
 int rtl8139_recv(void *buf, uint32_t size, char *pkt_re);
 uint8_t check_sent();
